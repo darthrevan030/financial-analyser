@@ -24,83 +24,103 @@ OUTPUT_CSV = Path("transactions_categorised.csv")
 RULES: list[tuple[str, str, str]] = [
 
     # ── Income ────────────────────────────────────────────────────────────────
-    (r"salary|payroll|pay credit|ntu|temus|money pasar|saf|mindef|ns pay", "Income", "Salary / NS Pay"),
-    (r"interest credit|interest earned|savings bonus|cashback|rebate",      "Income", "Interest / Cashback"),
-    (r"dividend|coupon payment|bond",                                        "Income", "Investment Income"),
-    (r"freelance|invoice|payment received",                                  "Income", "Freelance"),
+    (r"salary|payroll|pay credit|temus|money pasar|ns pay",                  "Income", "Salary / NS Pay"),
+    (r"giro.*salary.*mindef|giro.*salary.*saf|ps.*defence.*imprest|saf imprest", "Income", "Salary / NS Pay"),
+    (r"interest credit|interest earned|savings bonus|cashback reward|rebate|cr interest|cashback", "Income", "Interest / Cashback"),
+    (r"dividend|coupon payment|bond|sgs.*discount|t-bill.*discount|cdp.*bs",  "Income", "Investment Income"),
+    (r"advice gift|gift deposit|inward telegraphic transfer\b",               "Income", "Gift / Other Income"),
 
-    # ── Housing ───────────────────────────────────────────────────────────────
-    (r"hdb|town council|conservancy|s&cc|service and conservancy",           "Housing", "Town Council / S&CC"),
-    (r"rent|rental|landlord",                                                "Housing", "Rent"),
-    (r"sp group|sp services|utilities|singapore power",                      "Housing", "Utilities"),
-    (r"starhub|singtel|m1 |myrepublic|viewqwest|broadband|fibre",            "Housing", "Broadband / Phone"),
+    # ── Own account / PayLah transfers ────────────────────────────────────────
+    (r"top-up to paylah|send back from paylah|maxed out from paylah",         "Finance", "PayLah Transfer"),
+    (r"advice funds transfer.*i-bank|271-410|120-512|072-015",                "Finance", "Own Account Transfer"),
+    (r"fast.*samarth bhatia|samarth bhatia.*transfer|samarth bhatia.*ibft|ibftothr.*samarth|samarth.*ibftothr|si si ibftothr", "Finance", "Own Account Transfer"),
+    (r"giro standing instruction.*samarth|standing instruction.*samarth",     "Finance", "Own Account Transfer"),
+    (r"^samarth bhatia.*ibft|ibft.*samarth bhatia.*dbs bank",                 "Finance", "Own Account Transfer"),
 
-    # ── Food & Drink ──────────────────────────────────────────────────────────
-    (r"grabfood|foodpanda|deliveroo|mcdelivery|kfc\.com",                    "Food & Drink", "Food Delivery"),
-    (r"mcdonald|burger king|kfc|subway|jollibee|pizza|dominos|texas chicken","Food & Drink", "Fast Food"),
-    (r"kopitiam|food court|hawker|toast box|ya kun|old chang kee",           "Food & Drink", "Hawker / Coffee Shop"),
-    (r"starbucks|coffee bean|pacific coffee|spinelli|dutch colony",          "Food & Drink", "Café"),
-    (r"ntuc fairprice|fairprice|giant|cold storage|sheng siong|prime super", "Food & Drink", "Groceries"),
-    (r"don don donki|donki|marketplace|market place|wet market",             "Food & Drink", "Groceries"),
-    (r"restaurant|dining|eatery|bistro|cafe|kitchen|grill|buffet",          "Food & Drink", "Restaurant"),
-    (r"7-eleven|7eleven|cheers|watsons food|petrol kiosk food",             "Food & Drink", "Convenience Store"),
+    # ── Investments ───────────────────────────────────────────────────────────
+    (r"saxo capital",                                                          "Finance", "Investments"),
+    (r"asia wealth platform|remittance transfer.*asia wealth",                "Finance", "Investments"),
+    (r"singapore government securities|sgs application|t-bill|interactive br sg.*trusta", "Finance", "Investments"),
+    (r"advice.*sgs|advice.*dividends.*cdp|shopee.*wdrl|shopeepay.*wdrl",      "Finance", "Investments"),
+
+    # ── Education / NTU ──────────────────────────────────────────────────────
+    (r"nanyang technological university|ntu.*inv-|inv-.*ntu|xntu",            "Education", "Tuition / School Fees"),
+    (r"ntu hostel aircon|www\.ntu\.edu|ntu - singpore",                       "Education", "NTU Misc"),
+    (r"udemy|coursera|linkedin learn|skillsfuture|pluralsight",               "Education", "Online Courses"),
+    (r"booklink|nts-booklink|junior page|popular bookstore",                  "Education", "Books / Learning Materials"),
 
     # ── Transport ─────────────────────────────────────────────────────────────
-    (r"grab\b|gojek|tada cab|comfort|citycab|prime taxi|transit link",       "Transport", "Taxi / Ride-hailing"),
-    (r"ez-link|ezilink|transitlink|mrt|smrt|sbs transit|bus fare",          "Transport", "Public Transit"),
-    (r"petrol|esso|shell|caltex|sinopec|spc fuel|bharat petroleum",          "Transport", "Petrol"),
-    (r"car park|parking|ura parking|hdb carpark|wilson parking",             "Transport", "Parking"),
-    (r"scoot|jetstar|singapore airlines|sia |tiger air|airasia|cathay",      "Transport", "Flights"),
-    (r"chang[i] airport|changi travel|travel agent|klook|airbnb|booking\.com|agoda|hotels\.com|expedia", "Transport", "Travel / Accommodation"),
+    (r"bus/mrt|transit link|ez-link|ezilink|transitlink|mrt\b|smrt|sbs transit|transit 3000", "Transport", "Public Transit"),
+    (r"grab rides|grab\* [a-z0-9]|cabcharge|comfortdelgro driv|driving cen|aeroline|advice.*d2p.*comfortdelgro|d2pay.*comfortdelgro", "Transport", "Taxi / Ride-hailing"),
+    (r"parking\.sg|hdb carpark|wilson parking|ura parking",                   "Transport", "Parking"),
+    (r"scoot|jetstar|singapore airlines|\bsia \b|tiger air|airasia|cathay|lotte duty free", "Transport", "Flights"),
+
+    # ── Food Delivery ─────────────────────────────────────────────────────────
+    (r"grabfood|foodpanda|deliveroo|mcdelivery|uber.*eats",                   "Food & Drink", "Food Delivery"),
+
+    # ── Fast Food ─────────────────────────────────────────────────────────────
+    (r"mcdonald|mcdonalds|burger king|kfc\b|texas chicken|carl.s jr|mos burger|nando|subway\b|jollibee|stuff.d\b", "Food & Drink", "Fast Food"),
+
+    # ── Hawker / Food Courts ──────────────────────────────────────────────────
+    (r"kopitiam|food court|foodjunction|food junction|hawker|toast box|ya kun|old chang kee|koufu|pasta express|nts-pasta|sg f.b management|sg hawker|218 wang|big harvest noodle|ntu foodcourt|ntu canteen|105 drinks|fauzia muslim|ntu.*st\b|co-op cafe|canopy wanton|wok express|bbq house|fusion bowl|japanese korean|coffee break hd|esso-fairprice|encik tan|sembawang eating|sbtb stall|drinks stall", "Food & Drink", "Hawker / Coffee Shop"),
+
+    # ── Restaurants ──────────────────────────────────────────────────────────
+    (r"wok hey|saizeriya|hai di lao|pepper lunch|dabbawalla|indian curry|the tipsy cow|nuodle|hokkaido|maki-san|birds of paradise|timbre|shake shack|ajisen|baker.cook|le noir|piedra negra|hans im gluck|taco bar|shinya izakaya|bistro|naughtychef|gokoku|tapas 24|marche\b|din tai fung|ps cafe|chimichanga|alaturka|cheongheng|butter town|supreme ramen|dabbawalla|yew kee|net\*bakery|bakery cuisine|bakerycuisin|a hot hideout|suvai foods|indian\b.*stall", "Food & Drink", "Restaurant"),
+
+    # ── Cafés ────────────────────────────────────────────────────────────────
+    (r"starbucks|coffee bean|pacific coffee|spinelli|dutch colony|common man coffee|craftsmen coffee|coffee faculty|puzzle coffee|coffee smith|caffeine-xpress|lazy sloth|bean folks|venture drive coffee|ps cafe|daizu cafe|cafe carrera|rosso vino", "Food & Drink", "Café"),
+
+    # ── Bubble Tea / Desserts ─────────────────────────────────────────────────
+    (r"gong cha|gongcha|koi the|boba|tiger sugar|each.a.cup|tealive|cha time|sharetea|playmade|milksha|kind kones|mr coconut|chicha san chen|attea|chagee|an acai affair|randy indulgence|gelare|yole|mixue|le le bing|j\.co\b|llao llao|octobox|polar puffs|beard papa|nasty cookie|mr bean\b", "Food & Drink", "Bubble Tea / Dessert"),
+
+    # ── Groceries ─────────────────────────────────────────────────────────────
+    (r"fairprice|ntuc fp|\bntuc\b|giant\b|cold storage|sheng siong|prime supermarket|don don donki|donki|scarlett supermarket|abc bargain|nts-abc|dingo foods|better baker\b|four leaves|thekneadhouse|o bread|my bake studio|gourmet park|octobox", "Food & Drink", "Groceries"),
+
+    # ── Convenience ───────────────────────────────────────────────────────────
+    (r"7-eleven|7eleven|cheers holdings|cheers -",                            "Food & Drink", "Convenience Store"),
 
     # ── Shopping ──────────────────────────────────────────────────────────────
-    (r"shopee|lazada|amazon|qoo10|carousell|taobao|aliexpress",              "Shopping", "Online Marketplace"),
-    (r"uniqlo|h&m|zara|cotton on|pull&bear|topshop|g2000",                  "Shopping", "Clothing"),
-    (r"apple store|apple\.com|iphone|mac |ipad|samsung store",              "Shopping", "Electronics"),
-    (r"courts|harvey norman|gain city|challenger|best denki",                "Shopping", "Electronics"),
-    (r"ikea|home-fix|homefix|spotlight|daiso|miniso",                        "Shopping", "Home & Lifestyle"),
-    (r"guardian|watsons|unity|caring pharmacy",                              "Shopping", "Pharmacy / Health Products"),
-    (r"ntuc\b|fairprice\b|giant\b|cold storage\b|sheng siong\b",            "Shopping", "Supermarket"),  # non-food items
+    (r"shopee singapore mp|shopee.*sg|lazada|amazon.*sg|amazon retail|amazon mktplc|2c2\*amazon", "Shopping", "Online Marketplace"),
+    (r"uniqlo|h&m|\bzara\b|cotton on|pull.bear|topshop|g2000|bhg singapore|marks.*spencer|shein\b|typo-|by invite only|beauty language|lamy\b|gainswell|royal fragrances|pandora|sultan islamic|finest jewel|finest funan", "Shopping", "Clothing / Accessories"),
+    (r"courts|harvey norman|gain city|challenger|best denki|t k foto|sp spinnaker|h2 hub timepiece|crystal time|gadgetbox|blitzwerks\b", "Shopping", "Electronics / Watches"),
+    (r"guardian|watsons|unity pharmacy|heartland health|straits contact lens", "Health", "Pharmacy"),
+    (r"nts-3tmobilestory|la mode hair|ming hairport|nts-la mode|sp neven eyewear", "Shopping", "Personal Care"),
+    (r"ikea|home-fix|homefix|spotlight|daiso|miniso",                          "Shopping", "Home & Lifestyle"),
+    (r"parkway|raffles hospital|mount elizabeth|polyclinic|sgh\b|nuh\b|ttsh|kkh\b|ntfgh", "Health", "Medical"),
+    (r"prudential|great eastern|aia\b|aviva|manulife|tokio marine|income insurance", "Finance", "Insurance"),
 
     # ── Entertainment ─────────────────────────────────────────────────────────
-    (r"netflix|spotify|disney\+|apple tv|youtube premium|hbo|dazn|mubi",    "Entertainment", "Streaming"),
-    (r"shaw|cathay cineplexes|golden village|gv |filmgarde",                 "Entertainment", "Cinema"),
-    (r"steam|playstation|xbox|nintendo|epicgames|gog\.com",                  "Entertainment", "Gaming"),
-    (r"singapore zoo|night safari|gardens by the bay|sentosa|universal",     "Entertainment", "Attractions"),
-    (r"concert|ticketmaster|sistic|sports hub|kallang",                      "Entertainment", "Events / Concerts"),
-    (r"darts|pool|billiards|bowling|sports|gym|fitness|anytime fitness",     "Entertainment", "Sports / Fitness"),
+    (r"steam|playstation|xbox|nintendo|epicgames|steamgames|paddle\.net.*supercell|google.*supercell|google.*clash|clash of clans|microsoft.*xbox|microsoft.*store|kickstarter|google snapchat", "Entertainment", "Gaming"),
+    (r"shaw theatres|golden village|\bgv \b|filmgarde|cathay cineplexes|ticketmaster|singapore gp|kfi-arena|kf1 pte|superbowl|oche sg|sentosa express|singapore pub crawl|opvs|marquee singapore|gv tampines|alex warren", "Entertainment", "Events / Concerts"),
+    (r"28mm studios|blitzwerks\b",                                             "Entertainment", "Photography"),
 
-    # ── Health ────────────────────────────────────────────────────────────────
-    (r"polyclinic|sgh|nuh|ttsh|kkh|ntfgh|parkway|raffles hospital|mount e", "Health", "Medical"),
-    (r"dental|dentist|orthodonti",                                           "Health", "Dental"),
-    (r"pharmacy|guardian|watsons health",                                    "Health", "Pharmacy"),
-    (r"medisave|cpf medisave|great eastern health|prudential health|aia",    "Health", "Health Insurance"),
+    # ── Subscriptions ─────────────────────────────────────────────────────────
+    (r"spotify|netflix|disney|apple tv|youtube|hbo|dazn|mubi|flexcil|jetpacglobal|google chrome\b", "Subscriptions", "Streaming / Apps"),
+    (r"github|vercel|netlify|digitalocean|\baws\b|google cloud|azure|aentry\b", "Subscriptions", "Cloud / Dev Tools"),
 
-    # ── Education ─────────────────────────────────────────────────────────────
-    (r"ntu |nanyang tech|student fee|exam fee|tuition fee|course fee",       "Education", "Tuition / School Fees"),
-    (r"udemy|coursera|linkedin learn|skillsfuture|pluralsight",              "Education", "Online Courses"),
-    (r"books|kinokuniya|popular bookstore|times bookstore|amazon kindle",    "Education", "Books / Learning Materials"),
+    # ── Finance / Bank ────────────────────────────────────────────────────────
+    (r"cpf board|cpf contribution|medisave",                                   "Finance", "CPF"),
+    (r"gov gov ibftothr|\biras\b",                                             "Misc", "Government / Statutory"),
+    (r"giro standing instruction|giro.*salary\b|giro payments|giro.*collections", "Finance", "GIRO"),
+    (r"advice remittance|telegraphic transfer|inward telegraphic|ft\d+mb.*:ib", "Finance", "Remittance"),
+    (r"paynow transfer|fast\(othr\)|advice fast|ibft\|",                      "Finance", "Transfers"),
+    (r"atm cash withdrawal|atm cashcard|cashcard.*top-up",                    "Finance", "Cash Withdrawal"),
+    (r"shopeepay|fomo pay",                                                    "Finance", "E-wallet"),
+    (r"fresh laundry|es laundry",                                              "Misc", "Laundry"),
+    (r"singpost|courier|dhl|fedex|lalamove|federal express",                  "Misc", "Postage / Courier"),
+    (r"lta road tax|passport|immigration",                                     "Misc", "Government / Statutory"),
+    (r"donation|charity|giving\.sg|red cross",                                 "Misc", "Donations"),
 
-    # ── Finance ───────────────────────────────────────────────────────────────
-    (r"cpf contribution|cpf ordinary|cpf special|medisave top.?up",         "Finance", "CPF"),
-    (r"insurance|great eastern|prudential|income insurance|aia|aviva|manulife|tokio marine", "Finance", "Insurance"),
-    (r"giro|standing instruction|transfer to|funds transfer|paynow|fast transfer", "Finance", "Transfers"),
-    (r"investment|fsm|phillip securities|tiger broker|moomoo|syfe|endowus|stashaway", "Finance", "Investments"),
-    (r"atm withdrawal|cash withdrawal|cash advance",                         "Finance", "Cash Withdrawal"),
-    (r"annual fee|late charge|finance charge|interest charge|bank charge",   "Finance", "Bank Fees & Charges"),
-    (r"credit card payment|card payment|full payment",                       "Finance", "Credit Card Payment"),
+    # ── NETS QR / NTS catch-all ───────────────────────────────────────────────
+    (r"^nts-|^ntsqr ",                                                         "Shopping", "NETS Purchase"),
 
-    # ── Subscriptions / SaaS ──────────────────────────────────────────────────
-    (r"github|vercel|netlify|digitalocean|aws|google cloud|azure",           "Subscriptions", "Cloud / Dev Tools"),
-    (r"notion|figma|adobe|canva|microsoft 365|office 365|dropbox|icloud",    "Subscriptions", "Productivity Tools"),
-    (r"chatgpt|openai|anthropic|midjourney|perplexity",                      "Subscriptions", "AI Tools"),
-    (r"google one|google storage|apple storage",                             "Subscriptions", "Cloud Storage"),
+    # ── Standalone date codes (SCB value date artefacts) ─────────────────────
+    (r"^\d{2}/\d{2}$",                                                         "Finance", "Transfers"),
 
-    # ── Miscellaneous ─────────────────────────────────────────────────────────
-    (r"donation|charity|giving\.sg|red cross|spo|flag day",                  "Misc", "Donations / Charity"),
-    (r"post office|singpost|courier|dhl|fedex|lalamove",                     "Misc", "Postage / Courier"),
-    (r"government|iras|iras gst|lta road tax|passport|immigration",          "Misc", "Government / Taxes"),
+    # ── Date-prefixed card transactions with no other match ───────────────────
+    (r"^\d{2}/\d{2}[\s\-]",                                                    "Shopping", "Card Purchase"),
 ]
+
 
 
 def categorise(description: str) -> tuple[str, str]:
