@@ -30,6 +30,11 @@ RULES: list[tuple[str, str, str]] = [
     (r"dividend|coupon payment|bond|sgs.*discount|t-bill.*discount|cdp.*bs",  "Income", "Investment Income"),
     (r"advice gift|gift deposit|inward telegraphic transfer\b",               "Income", "Gift / Other Income"),
 
+    # ── Family allowance (must be before generic Transfers rule) ────────────────
+    (r"paynow transfer vikram bhatia|fast.*vikram bhatia|ibft.*vikram bhatia|vikram bhatia.*paynow|vikram bhatia.*ibft|mr bhatia vikram|bhatia vikram.*driving fees|bhatia vikram.*wine|bhatia vikram na", "Income", "Family Allowance"),
+    (r"paynow transfer mahiyu bhatia|fast.*mahiyu bhatia|ibft.*mahiyu bhatia|mahiyu bhatia.*paynow|mahiyu bhatia.*ibft|dadima kharchi mahiyu", "Income", "Family Allowance"),
+    (r"paynow transfer goel shweta|fast.*goel shweta|ibft.*goel shweta|goel shweta.*paynow|goel shweta.*ibft|paynow transfer shweta|ibft.*shweta|shweta.*ibft", "Income", "Family Allowance"),
+
     # ── Own account / PayLah transfers ────────────────────────────────────────
     (r"top-up to paylah|send back from paylah|maxed out from paylah",         "Finance", "PayLah Transfer"),
     (r"advice funds transfer.*i-bank|271-410|120-512|072-015",                "Finance", "Own Account Transfer"),
