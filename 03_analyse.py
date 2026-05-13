@@ -34,15 +34,44 @@ def sgd(val: float) -> str:
 
 # ─── LOAD DATA ────────────────────────────────────────────────────────────────
 
+# Categories that represent internal transfers / not real cashflow
+EXCLUDE_CATS = {
+    "Finance",   # own account transfers, GIRO SIs, FAST to self, investments
+}
+# Within Finance, these subcategories DO represent real outflows worth tracking
+INCLUDE_FINANCE_SUBS = {
+    "Investments",  # money leaving to brokerage — real deployment
+    "Insurance",
+    "Bank Fees & Charges",
+}
+
+INTERNAL_SUBCATEGORIES = {
+    "Own Account Transfer",
+    "PayLah Transfer",
+    "Transfers",
+    "GIRO",
+    "Remittance",
+    "E-wallet",
+}
+
+def real(df: pd.DataFrame) -> pd.DataFrame:
+    """Exclude internal transfers — only real economic transactions."""
+    return df[~df["subcategory"].isin(INTERNAL_SUBCATEGORIES)]
+
 def load() -> pd.DataFrame:
     df = pd.read_csv(INPUT_CSV, parse_dates=["date"])
     df["year"]       = df["date"].dt.year
     df["month"]      = df["date"].dt.to_period("M")
     df["month_str"]  = df["date"].dt.strftime("%Y-%m")
     df["year_month"] = df["date"].dt.to_period("M")
-    # Split income vs expense
-    df["is_income"]  = (df["category"] == "Income") | (df["amount"] > 0)
-    df["is_expense"] = df["amount"] < 0
+
+    # Mark rows that are real cashflow (exclude internal transfers)
+    is_finance     = df["category"] == "Finance"
+    is_keep_finance = df["subcategory"].isin(INCLUDE_FINANCE_SUBS)
+    df["is_real"]  = ~is_finance | is_keep_finance
+
+    df["is_income"]  = df["is_real"] & (df["amount"] > 0)
+    df["is_expense"] = df["is_real"] & (df["amount"] < 0)
     return df
 
 # ─── CHARTS ───────────────────────────────────────────────────────────────────
@@ -51,9 +80,10 @@ PALETTE = ["#2E86AB", "#A23B72", "#F18F01", "#C73E1D", "#3B1F2B",
            "#44BBA4", "#E94F37", "#393E41", "#F5A623", "#7B2D8B"]
 
 def chart_monthly_cashflow(df: pd.DataFrame):
+    df = real(df)
     monthly = df.groupby("month_str").agg(
         income  = ("amount", lambda x: x[x > 0].sum()),
-        expense = ("amount", lambda x: x[x < 0].sum().abs()),
+        expense = ("amount", lambda x: abs(x[x < 0].sum())),
     ).reset_index()
     monthly["net"] = monthly["income"] - monthly["expense"]
 
@@ -80,9 +110,10 @@ def chart_monthly_cashflow(df: pd.DataFrame):
 
 
 def chart_annual_summary(df: pd.DataFrame):
+    df = real(df)
     annual = df.groupby("year").agg(
         income  = ("amount", lambda x: x[x > 0].sum()),
-        expense = ("amount", lambda x: x[x < 0].sum().abs()),
+        expense = ("amount", lambda x: abs(x[x < 0].sum())),
     ).reset_index()
     annual["savings_rate"] = ((annual["income"] - annual["expense"]) / annual["income"] * 100).clip(0, 100)
 
@@ -115,6 +146,7 @@ def chart_annual_summary(df: pd.DataFrame):
 
 
 def chart_category_breakdown(df: pd.DataFrame):
+    df = real(df)
     expenses = df[df["amount"] < 0].copy()
     expenses["amount_abs"] = expenses["amount"].abs()
     by_cat = expenses.groupby("category")["amount_abs"].sum().sort_values(ascending=False)
@@ -137,6 +169,7 @@ def chart_category_breakdown(df: pd.DataFrame):
 
 
 def chart_top_merchants(df: pd.DataFrame):
+    df = real(df)
     expenses = df[df["amount"] < 0].copy()
     expenses["amount_abs"] = expenses["amount"].abs()
     top = expenses.groupby("description")["amount_abs"].sum().sort_values(ascending=False).head(20)
@@ -158,6 +191,7 @@ def chart_top_merchants(df: pd.DataFrame):
 
 def chart_spending_heatmap(df: pd.DataFrame):
     """Heatmap of monthly spend by category across years."""
+    df = real(df)
     expenses = df[(df["amount"] < 0) & (df["category"] != "Finance")].copy()
     expenses["amount_abs"] = expenses["amount"].abs()
     pivot = expenses.pivot_table(
@@ -207,6 +241,7 @@ def chart_running_balance(df: pd.DataFrame):
 # ─── TEXT REPORT ──────────────────────────────────────────────────────────────
 
 def generate_report(df: pd.DataFrame) -> str:
+    df = real(df)
     lines = []
     sep = "─" * 60
 
@@ -247,7 +282,7 @@ def generate_report(df: pd.DataFrame) -> str:
 
     h("SPEND BY CATEGORY (ALL TIME)")
     expenses = df[df["amount"] < 0]
-    by_cat   = expenses.groupby("category")["amount"].abs().sum().sort_values(ascending=False)
+    by_cat   = expenses.groupby("category")["amount"].apply(lambda x: x.abs().sum()).sort_values(ascending=False)
     total_exp = by_cat.sum()
     lines.append(f"\n  {'Category':<28} {'Total':>12} {'% of Spend':>12}")
     lines.append(f"  {'─'*28} {'─'*12} {'─'*12}")
@@ -255,12 +290,12 @@ def generate_report(df: pd.DataFrame) -> str:
         lines.append(f"  {cat:<28} {sgd(val):>12} {val/total_exp*100:>11.1f}%")
 
     h("TOP 10 SUBCATEGORIES BY SPEND")
-    by_sub = expenses.groupby(["category", "subcategory"])["amount"].abs().sum().sort_values(ascending=False).head(10)
+    by_sub = expenses.groupby(["category", "subcategory"])["amount"].apply(lambda x: x.abs().sum()).sort_values(ascending=False).head(10)
     for (cat, sub), val in by_sub.items():
         lines.append(f"  {cat} → {sub:<35} {sgd(val)}")
 
     h("TOP 15 MERCHANTS / PAYEES")
-    top_merch = expenses.groupby("description")["amount"].abs().sum().sort_values(ascending=False).head(15)
+    top_merch = expenses.groupby("description")["amount"].apply(lambda x: x.abs().sum()).sort_values(ascending=False).head(15)
     for desc, val in top_merch.items():
         lines.append(f"  {textwrap.shorten(desc, 45):<47} {sgd(val)}")
 
@@ -288,6 +323,7 @@ def generate_report(df: pd.DataFrame) -> str:
 # ─── HTML DASHBOARD ───────────────────────────────────────────────────────────
 
 def generate_dashboard(df: pd.DataFrame):
+    df = real(df)
     """Generate a self-contained interactive HTML dashboard using Chart.js."""
 
     # Prepare data
@@ -302,7 +338,7 @@ def generate_dashboard(df: pd.DataFrame):
     ).reset_index()
     annual["savings_rate"] = ((annual["income"] - annual["expense"]) / annual["income"] * 100).clip(0)
 
-    cat_spend = df[df["amount"] < 0].groupby("category")["amount"].abs().sum().sort_values(ascending=False)
+    cat_spend = df[df["amount"] < 0].groupby("category")["amount"].apply(lambda x: x.abs().sum()).sort_values(ascending=False)
     cat_spend = cat_spend[cat_spend.index != "Finance"].head(10)
 
     monthly_labels = json.dumps(monthly["month_str"].tolist())
