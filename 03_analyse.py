@@ -54,9 +54,23 @@ INTERNAL_SUBCATEGORIES = {
     "E-wallet",
 }
 
+INVESTMENT_SUBCATEGORIES = {
+    "Stocks / ETFs (SAXO)",
+    "Stocks / ETFs (IBKR)",
+    "T-Bills / SGS",
+    "Asia Wealth Platform",
+}
+
+def investments(df: pd.DataFrame) -> pd.DataFrame:
+    """Return only investment transactions."""
+    return df[df["subcategory"].isin(INVESTMENT_SUBCATEGORIES)]
+
 def real(df: pd.DataFrame) -> pd.DataFrame:
-    """Exclude internal transfers — only real economic transactions."""
-    return df[~df["subcategory"].isin(INTERNAL_SUBCATEGORIES)]
+    """Exclude internal transfers and investments — only real consumption spending."""
+    return df[
+        ~df["subcategory"].isin(INTERNAL_SUBCATEGORIES) &
+        ~df["subcategory"].isin(INVESTMENT_SUBCATEGORIES)
+    ]
 
 def load() -> pd.DataFrame:
     df = pd.read_csv(INPUT_CSV, parse_dates=["date"])
@@ -115,7 +129,7 @@ def chart_annual_summary(df: pd.DataFrame):
         income  = ("amount", lambda x: x[x > 0].sum()),
         expense = ("amount", lambda x: abs(x[x < 0].sum())),
     ).reset_index()
-    annual["savings_rate"] = ((annual["income"] - annual["expense"]) / annual["income"] * 100).clip(0, 100)
+    annual["savings_rate"] = ((annual["income"] - annual["expense"]) / annual["income"] * 100).replace([float("inf"), float("-inf")], 0).fillna(0)
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
 
@@ -130,14 +144,17 @@ def chart_annual_summary(df: pd.DataFrame):
     ax1.set_title("Annual Income vs Expense", fontweight="bold")
     ax1.legend(); ax1.grid(axis="y", alpha=0.3)
 
-    # Savings rate
-    ax2.bar(x, annual["savings_rate"], color="#2E86AB")
+    # Savings rate — allow negatives
+    colors_sr = ["#2E86AB" if v >= 0 else "#E94F37" for v in annual["savings_rate"]]
+    ax2.bar(x, annual["savings_rate"], color=colors_sr)
     ax2.set_xticks(x); ax2.set_xticklabels(years)
     ax2.yaxis.set_major_formatter(mticker.FuncFormatter(lambda v, _: f"{v:.0f}%"))
     ax2.set_title("Annual Savings Rate", fontweight="bold")
-    ax2.set_ylim(0, 100); ax2.grid(axis="y", alpha=0.3)
+    ax2.axhline(0, color="black", linewidth=0.8)
+    ax2.grid(axis="y", alpha=0.3)
     for i, v in enumerate(annual["savings_rate"]):
-        ax2.text(i, v + 1, f"{v:.1f}%", ha="center", fontsize=9)
+        offset = 1 if v >= 0 else -4
+        ax2.text(i, v + offset, f"{v:.1f}%", ha="center", fontsize=9)
 
     fig.tight_layout()
     fig.savefig(CHARTS_DIR / "02_annual_summary.png", dpi=150)
@@ -241,6 +258,7 @@ def chart_running_balance(df: pd.DataFrame):
 # ─── TEXT REPORT ──────────────────────────────────────────────────────────────
 
 def generate_report(df: pd.DataFrame) -> str:
+    df_full = df.copy()
     df = real(df)
     lines = []
     sep = "─" * 60
@@ -298,6 +316,22 @@ def generate_report(df: pd.DataFrame) -> str:
     top_merch = expenses.groupby("description")["amount"].apply(lambda x: x.abs().sum()).sort_values(ascending=False).head(15)
     for desc, val in top_merch.items():
         lines.append(f"  {textwrap.shorten(desc, 45):<47} {sgd(val)}")
+
+    h("INVESTMENTS (EXCLUDED FROM SPEND)")
+    inv = investments(df_full)
+    inv_out = inv[inv["amount"] < 0]["amount"].abs().sum()
+    inv_in  = inv[inv["amount"] > 0]["amount"].sum()
+    row("Total invested (outflows)",  sgd(inv_out))
+    row("Total returned (inflows)",   sgd(inv_in))
+    row("Net invested",               sgd(inv_out - inv_in))
+    lines.append("")
+    by_inv = inv.groupby("subcategory")["amount"].apply(
+        lambda x: pd.Series({"out": x[x<0].abs().sum(), "in": x[x>0].sum()})
+    ).unstack(fill_value=0)
+    for sub in by_inv.index:
+        out = by_inv.loc[sub, "out"] if "out" in by_inv.columns else 0
+        ins = by_inv.loc[sub, "in"]  if "in"  in by_inv.columns else 0
+        lines.append(f"  {sub:<35} out: {sgd(out):>12}   in: {sgd(ins):>12}")
 
     h("UNCATEGORISED TRANSACTIONS")
     unc = df[df["category"] == "Uncategorised"]
