@@ -234,71 +234,88 @@ def parse_scb(pdf_path: Path) -> list[dict]:
     """
     Parse a Standard Chartered statement PDF using pymupdf.
 
-    SCB statements have no table borders — columns are extracted as
-    separate text lines in reading order. Observed layout per transaction:
+    Two known layouts:
 
-      BALANCE_AFTER   '31.84 '          <- float ending with space(s)
-      DATE            '03 Jan'          <- DD Mon (short, no year)
-      DESCRIPTION     'CASHBACK REWARD'
-      [extra desc]    'SAMARTH BHATIA'
-      DEPOSIT or      '0.17'            <- plain float, no trailing space
-      WITHDRAWAL      '2.58'
+    OLD (up to ~Aug 2022, JumpStart):
+      Columns jumbled as separate lines, amounts have trailing spaces for balance.
+      Date: 'DD Mon' (short)
+      Balance lines have trailing space(s); txn amount lines do not.
+      Withdrawal marked by '−' (unicode minus) on its own line after amount.
 
-    Statement year extracted from header: 'Statement Date : 31 Jan 2022'
-    Page 2+ are legend/reconciliation pages — skip them.
-
-    Strategy: collect lines, identify dates, then look ahead for amounts.
-    A line is an amount if it matches a bare float (no trailing spaces = txn amt;
-    trailing spaces = balance). Date lines are 'DD Mon' or 'DD MMM'.
+    NEW (Sep 2022+):
+      Full dates: '30 Sep 2022'
+      After description lines, TWO consecutive bare numbers appear:
+        first  = transaction amount (withdrawal or deposit)
+        second = running balance
+      Credits: CASHBACK, CR INTEREST, FAST(OTHR) without '−', PAYNOW, SALARY, etc.
+      Withdrawals: everything else (BUS/MRT, merchant names, etc.)
+      Page 3 is legend — skip it.
     """
     transactions = []
     account_type = "SCB Account"
     acct_no_raw  = ""
     statement_year = str(datetime.now().year)
 
+    DATE_FULL   = re.compile(r"^(\d{1,2}\s+[A-Za-z]{3}\s+\d{4})\s*$")
     DATE_SHORT  = re.compile(r"^(\d{1,2}\s+[A-Za-z]{3})\s*$")
-    AMOUNT_TXN  = re.compile(r"^(\d{1,3}(?:,\d{3})*\.\d{2})\s*$")   # no trailing spaces
-    AMOUNT_BAL  = re.compile(r"^(\d{1,3}(?:,\d{3})*\.\d{2})\s+$")   # trailing space(s) = balance
-    YEAR_HDR    = re.compile(r"Statement\s+Date\s*:\s*\d{1,2}\s+[A-Za-z]+\s+(\d{4})", re.I)
-    ACCT_NO_RE  = re.compile(r"(\d{2}-\d{1}-\d{6}-\d)")              # SCB format: 01-2-806371-8
+    AMOUNT_RE2  = re.compile(r"^\d{1,3}(?:,\d{3})*\.\d{2}\s*$")
+    YEAR_HDR    = re.compile(r"Statement\s+Date\s*[:\-]\s*\d{1,2}\s+[A-Za-z]+\s+(\d{4})", re.I)
+    ACCT_NO_RE  = re.compile(r"(\d{2}-\d{1}-\d{6}-\d)")
     SKIP_PAGE   = re.compile(
-        r"Reconciling|Savings Account Transaction|Explanation of abbrevi|"
-        r"Balance as per|Add Total deposits|Subtract|cheque book|"
-        r"Cheque.s. issued|Cash Deposit|Cash Withdrawal|Transfer Deposit|"
-        r"Transfer Withdrawal|Cheque Deposit|ATM Cash|ATM Transfer|"
-        r"Interest$|Standing Instruction|Salary$|Nobook",
+        r"Reconciling|Savings Account Transaction|Explanation of Abbrev|"
+        r"Explanation of abbrevi|Balance as per|Add Total deposits|"
+        r"Subtract|cheque book|Cheque.s. issued|Cash Deposit$|"
+        r"Cash Withdrawal$|Transfer Deposit$|Transfer Withdrawal$|"
+        r"Cheque Deposit$|ATM Cash|ATM Transfer|Standing Instruction$|"
+        r"Salary$|Nobook|Contact Us|Personal Banking$|Business Banking$|"
+        r"Priority Banking$|Commercial Banking$|Private Banking$|"
+        r"Corporate and Institutional Banking$|Adjustment$|"
+        r"Business Overdraft$|Cheque\(s\)$|Deposit$|Nets$|"
+        r"Telegraphic Transfer$|Automated Teller|Business Credit|"
+        r"Clearing$|Draft$|Reversal$|Withdrawal$|Cash Card|"
+        r"Business Unsecured|Correction$|Debit$|Personal Credit|"
+        r"branch and ATM",
         re.I
     )
     SKIP_LINE   = re.compile(
-        r"^(Statement of Account|Page\s*:|Branch:|Priority Banking|"
+        r"^(Statement of Account|Page\s|Branch\s*:|Priority Banking|"
         r"Personal Banking|Business Banking|Commercial Banking|"
-        r"Corporate and Institutional|GST Group|Note: If you note|"
-        r"If you have moved|BALANCE FROM PREVIOUS|VALUE DATE|"
-        r"Reconciling|SGD Balance|Deposit$|Withdrawal$|Description$|Date$|"
-        r"This statement serves)",
+        r"Corporate and Institutional|GST Group|Reg\. No\.|Reg\. Add\.|"
+        r"Note: If you note|If you have moved|BALANCE FROM PREVIOUS|"
+        r"CLOSING BALANCE|VALUE DATE|SGD Balance|Deposit$|Withdrawal$|"
+        r"Description$|Date$|Balance$|This statement serves|"
+        r"Standard Chartered Bank|Deposit Insurance|Singapore dollar deposits|"
+        r"are not insured|Your Statement of Account|Cashback Summary|"
+        r"Mastercard Spend|Average Daily Balance$)",
         re.I
     )
     CREDIT_DESC = re.compile(
-        r"cashback|incoming|fast\(othr\)|fast.*receipt|salary|payroll|"
-        r"interest|refund|rebate|dividend|reversal|returned|transfer$|"
-        r"deposit|PAYNOW|standing instruction credit",
+        r"cashback|cr interest|interest credit|incoming|fast\(othr\)|fast.*receipt|salary|payroll|refund|rebate|dividend|"
+        r"reversal|returned|paynow|standing instruction.*cr|deposit$|"
+        r"transfer.*in|credit$",
         re.I
     )
-    NOISE_LINE  = re.compile(
-        r"^(\s*[a-z]\s*$|^\s*[\.\(\)]\s*$)",  # single char lines from legend
-    )
+    NOISE_LINE  = re.compile(r"^(\s*[a-z]\s*|\s*[a-z]\.\s*|\s*[ivx]+\.\s*|\s*[\.\(\)]\s*)$")
 
     doc = fitz.open(str(pdf_path))
 
     for page_num, page in enumerate(doc):
-        text = page.get_text()
-        lines = [l for l in text.splitlines()]   # keep original spacing for balance detection
+        lines_raw = page.get_text().splitlines()
+        lines = [l.strip() for l in lines_raw]
 
-        # Skip legend/reconciliation pages
-        if any(SKIP_PAGE.search(l) for l in lines[:15]):
+        # Skip legend/reconciliation/contact pages
+        non_empty = [l for l in lines if l]
+        if len(non_empty) < 5:
             continue
+        # Check first 20 non-empty lines for skip signals
+        sample = " ".join(non_empty[:20])
+        if SKIP_PAGE.search(sample) and not DATE_FULL.match(non_empty[0] if non_empty else ""):
+            # More careful: only skip if no transaction dates found
+            has_dates = any(DATE_FULL.match(l) or DATE_SHORT.match(l) for l in lines)
+            if not has_dates:
+                continue
 
-        # Extract statement year and account info from header
+        # Detect format from first page header
         for line in lines[:20]:
             ym = YEAR_HDR.search(line)
             if ym:
@@ -306,36 +323,43 @@ def parse_scb(pdf_path: Path) -> list[dict]:
             an = ACCT_NO_RE.search(line)
             if an:
                 acct_no_raw = an.group(1)
-            # Account type from lines like 'JUMPSTART' or 'BonusSaver'
-            if re.match(r"^(JUMPSTART|BonusSaver|e\$aver|MySaver|"
+            if re.match(r"^(JUMPSTART|BonusSaver|e\$aver|MySaver|Bonus\$aver|"
                         r"Salary Credit|Unlimited|Simply Cash|Platinum|"
-                        r"EasyCredit|e-Saver|Bonus\$aver)", line.strip(), re.I):
+                        r"EasyCredit|e-Saver)", line, re.I):
                 account_type = f"SCB {line.strip()}"
 
-        # ── Parse transactions ────────────────────────────────────────────
-        # Collect stripped lines, tagging each as: DATE | AMOUNT_TXN | AMOUNT_BAL | TEXT
-        tagged = []
-        for line in lines:
-            s = line.strip()
-            if not s:
-                continue
-            if SKIP_LINE.match(s):
-                continue
-            if NOISE_LINE.match(s):
-                continue
-            # Keep original line for balance detection (trailing spaces)
-            if AMOUNT_BAL.match(line.rstrip('\n')):
-                tagged.append(('BAL', s))
-            elif AMOUNT_TXN.match(s):
-                tagged.append(('AMT', s))
-            elif DATE_SHORT.match(s):
-                tagged.append(('DATE', s))
-            else:
-                tagged.append(('TEXT', s))
+        # Determine layout: new format has full dates like '30 Sep 2022'
+        has_full_dates = any(DATE_FULL.match(l) for l in lines)
 
-        # Walk tagged lines: DATE starts a transaction, AMT closes it
-        # Structure: BAL? DATE TEXT+ AMT BAL?
-        # A minus sign '−' (unicode \u2212) on its own means the AMT is a withdrawal
+        # ── Tagged line pass ──────────────────────────────────────────────
+        tagged = []
+        for raw, stripped in zip(lines_raw, lines):
+            if not stripped:
+                continue
+            if SKIP_LINE.match(stripped):
+                continue
+            if NOISE_LINE.match(stripped):
+                continue
+            if any(stripped == x for x in ['Cashback', 'Average Daily Balance',
+                                             'Mastercard Spend']):
+                continue
+
+            if has_full_dates and DATE_FULL.match(stripped):
+                tagged.append(('DATE', stripped))
+            elif not has_full_dates and DATE_SHORT.match(stripped):
+                tagged.append(('DATE', stripped))
+            elif AMOUNT_RE2.match(stripped):
+                # Old format: trailing space in raw line = balance
+                if not has_full_dates and raw.rstrip('\n').endswith(' '):
+                    tagged.append(('BAL', stripped))
+                else:
+                    tagged.append(('AMT', stripped))
+            elif stripped in ('-', '\u2212', '\u2013', '−'):
+                tagged.append(('MINUS', stripped))
+            else:
+                tagged.append(('TEXT', stripped))
+
+        # ── State machine ─────────────────────────────────────────────────
         i = 0
         while i < len(tagged):
             tag, val = tagged[i]
@@ -344,11 +368,14 @@ def parse_scb(pdf_path: Path) -> list[dict]:
             if tag != 'DATE':
                 continue
 
-            txn_date = parse_date(f"{val} {statement_year}")
+            # Parse date
+            if has_full_dates:
+                txn_date = parse_date(val)
+            else:
+                txn_date = parse_date(f"{val} {statement_year}")
             if not txn_date:
                 continue
 
-            # Collect description and find the transaction amount
             desc_parts = []
             txn_amount = None
             is_minus   = False
@@ -357,33 +384,33 @@ def parse_scb(pdf_path: Path) -> list[dict]:
                 t2, v2 = tagged[i]
 
                 if t2 == 'DATE':
-                    break  # next transaction starts
+                    break
                 elif t2 == 'BAL':
                     i += 1
-                    continue  # skip balance lines
+                    continue
+                elif t2 == 'MINUS':
+                    is_minus = True
+                    i += 1
                 elif t2 == 'AMT':
                     txn_amount = float(v2.replace(',', ''))
                     i += 1
-                    # Check if next non-bal line is a minus sign
-                    while i < len(tagged) and tagged[i][0] == 'BAL':
-                        i += 1
-                    if i < len(tagged) and tagged[i][1] in ('-', '\u2212', '−'):
-                        is_minus = True
-                        i += 1
+                    if has_full_dates:
+                        # New format: next AMT is the balance — skip it
+                        if i < len(tagged) and tagged[i][0] == 'AMT':
+                            i += 1
                     break
-                elif t2 == 'TEXT':
-                    if v2 not in ('-', '\u2212', '−'):
+                else:  # TEXT
+                    if not SKIP_LINE.match(v2):
                         desc_parts.append(v2)
-                    else:
-                        is_minus = True
                     i += 1
 
             if txn_amount is None or not desc_parts:
                 continue
 
-            desc    = ' '.join(desc_parts).strip()
-            # Determine credit vs debit:
-            # If is_minus flag set → debit; otherwise use description keywords
+            desc = ' '.join(desc_parts).strip()
+            # Strip SGD amount annotations like 'SGD 7.75' from desc
+            desc = re.sub(r'\bSGD\s+[\d,]+\.\d{2}\b', '', desc).strip()
+
             if is_minus:
                 is_cr = False
             else:
@@ -394,7 +421,7 @@ def parse_scb(pdf_path: Path) -> list[dict]:
                 "bank":        "Standard Chartered",
                 "account":     account_type,
                 "account_no":  f"****{acct_no_raw[-4:]}" if acct_no_raw else "",
-                "description": desc,
+                "description": desc.strip(),
                 "amount":      round(txn_amount if is_cr else -txn_amount, 2),
                 "type":        "credit" if is_cr else "debit",
                 "source_file": pdf_path.name,
