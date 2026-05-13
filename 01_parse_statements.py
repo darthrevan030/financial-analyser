@@ -25,6 +25,7 @@ OUTPUT_CSV     = Path("transactions.csv")
 # ─── SHARED HELPERS ───────────────────────────────────────────────────────────
 
 AMOUNT_RE = re.compile(r"([\d,]+\.\d{2})\s*(CR|DR)?", re.IGNORECASE)
+SCB_DATE   = re.compile(r"(\d{2}\s+[A-Za-z]{3}\s+\d{4}|\d{2}/\d{2}/\d{4}|\d{2}\s+[A-Za-z]{3})")
 
 def parse_amount(raw: str) -> float | None:
     if not raw:
@@ -95,178 +96,123 @@ SKIP_LINES = re.compile(
 def parse_dbs(pdf_path: Path) -> list[dict]:
     """
     Parse a DBS consolidated statement PDF using pymupdf.
-    Handles DBS's custom font encoding that breaks pdfplumber.
+
+    Actual per-line structure (verified from real statements):
+      '04/04/2021'                       <- date alone on its own line
+      'Advice FAST Payment / Receipt'    <- description line(s)
+      'PAYNOW TRANSFER'
+      "TO: ASIA WEALTH PLATFORM- CLIENT'S"
+      '7RNRG223'
+      'OTHER'
+      '100.00 '                          <- amount (withdrawal OR deposit)
+      '2,522.25  '                       <- balance (consumed + discarded)
+
+    State machine: IDLE -> DATE_SEEN -> collecting DESC -> AMOUNT_SEEN -> commit
     """
     transactions = []
     current_account = "DBS Account"
     current_acct_no = ""
 
+    DATE_ONLY   = re.compile(r"^(\d{2}/\d{2}/\d{4})\s*$")
+    AMOUNT_ONLY = re.compile(r"^\d{1,3}(?:,\d{3})*\.\d{2}\s*$")
+    SKIP        = re.compile(
+        r"^(Date|Description|Withdrawal|Deposit|Balance|CURRENCY|"
+        r"Balance Brought Forward|Transaction Details|Deposits|Loans|"
+        r"Credit Cards|Page \d|PDS_|SG\d|DBS Co\.|Account Summary|"
+        r"Summary of Currency|Total:|SGD Equivalent|\(Base Currency\)|"
+        r"\(SGD Equivalent\)|Account No\.|Consolidated Statement)$",
+        re.IGNORECASE
+    )
+    ACCT_HDR = re.compile(
+        r"^(My Account|Multiplier|MySavings|eMySavings|Autosave|"
+        r"POSB Savings|Current Account|Cashline|Visa Platinum|"
+        r"Mastercard|Debit|Credit Card|Pocket Money|MultiCurrency|"
+        r"DBS [\w ]+Account|DBS [\w ]+Card)",
+        re.IGNORECASE
+    )
+    ACCT_NO = re.compile(r"(\d{3}-\d{6}-\d)")
+    CREDIT_DESC = re.compile(
+        r"incoming|from:|paynow transfer$|fast.*receipt|giro.*cr|"
+        r"salary|payroll|interest earned|refund|cashback|rebate|dividend|"
+        r"reversal|returned|NS PAY|mindef|maxed out from paylah",
+        re.IGNORECASE
+    )
+
     doc = fitz.open(str(pdf_path))
 
     for page in doc:
-        lines = page.get_text().splitlines()
+        lines = [l.strip() for l in page.get_text().splitlines()]
 
-        pending_date     = None
-        pending_desc     = []
-        pending_txn_type = ""
+        state    = "IDLE"
+        txn_date = None
+        txn_desc = []
 
-        def flush_pending():
-            """Commit the buffered transaction once we have date+desc+amount."""
-            nonlocal pending_date, pending_desc, pending_txn_type
-            pending_date = None
-            pending_desc = []
-            pending_txn_type = ""
+        def commit(amount_raw, desc_lines, date):
+            amt  = float(amount_raw.replace(",", ""))
+            desc = " ".join(desc_lines).strip()
+            is_cr = bool(CREDIT_DESC.search(desc))
+            transactions.append({
+                "date":        date,
+                "bank":        "DBS",
+                "account":     current_account,
+                "account_no":  f"****{current_acct_no[-4:]}" if current_acct_no else "",
+                "description": desc,
+                "amount":      round(amt if is_cr else -amt, 2),
+                "type":        "credit" if is_cr else "debit",
+                "source_file": pdf_path.name,
+            })
 
         i = 0
         while i < len(lines):
-            line = lines[i].strip()
+            line = lines[i]
             i += 1
 
             if not line:
                 continue
 
-            # ── Account section header detection ─────────────────────────
-            acct_m = DBS_ACCT_NAME.search(line)
-            if acct_m and len(line) < 60:
-                current_account = line.strip()
-                # Next non-empty line may be account number
-                j = i
-                while j < len(lines) and j < i + 3:
-                    nxt = lines[j].strip()
-                    no_m = DBS_ACCT_NO.search(nxt)
+            # Account header
+            if ACCT_HDR.match(line) and len(line) < 80:
+                current_account = line
+                for k in range(i, min(i + 4, len(lines))):
+                    no_m = ACCT_NO.search(lines[k])
                     if no_m:
                         current_acct_no = no_m.group(1)
                         break
-                    j += 1
+                state = "IDLE"; txn_date = None; txn_desc = []
                 continue
 
-            # ── Skip header / footer lines ────────────────────────────────
-            if SKIP_LINES.search(line):
+            if SKIP.match(line):
+                continue
+            if any(x in line for x in ["S/N:", "BLK ", "SINGAPORE ", "#0", "Reg. No", "Reg No"]):
                 continue
 
-            # ── Try to match a transaction line (starts with DD/MM/YYYY) ──
-            date_m = DBS_TXN_DATE.match(line)
-            if date_m:
-                # Flush any previous pending transaction (shouldn't have
-                # an amount yet at this point — that comes after desc lines)
-                # Start new pending transaction
-                raw_date  = date_m.group(1)
-                remainder = date_m.group(2).strip()
+            if state == "IDLE":
+                if DATE_ONLY.match(line):
+                    txn_date = parse_date(line)
+                    txn_desc = []
+                    state    = "DESC"
 
-                date_str = parse_date(raw_date)
-                if not date_str:
-                    continue
+            elif state == "DESC":
+                if DATE_ONLY.match(line):
+                    # New date before we saw an amount — reset
+                    txn_date = parse_date(line)
+                    txn_desc = []
 
-                # Extract amounts from the remainder if present
-                amt_m = DBS_AMOUNTS.search(remainder)
-                if amt_m:
-                    # Both withdrawal/deposit amount AND balance on same line
-                    amt1 = float(amt_m.group(1).replace(",", ""))
-                    # amt2 is balance — ignore
-                    desc_part = remainder[:amt_m.start()].strip()
-                    # Determine debit vs credit: look ahead or check context
-                    # We'll store amt1 as unsigned and resolve direction below
-                    pending_date     = date_str
-                    pending_desc     = [desc_part] if desc_part else []
-                    pending_txn_type = "debit"  # resolved below
-                    # Look for a deposit marker on the next line
-                    # Actually: in DBS layout, withdrawal col comes before deposit.
-                    # We need to check if next non-empty line has another amount
-                    # (meaning amt1 was withdrawal and next is balance,
-                    #  or amt1 was deposit). We resolve by checking if there's
-                    # a second amount line immediately after.
-                    # Simpler: peek at next line
-                    if i < len(lines):
-                        nxt = lines[i].strip()
-                        nxt_amt = DBS_ONE_AMOUNT.search(nxt)
-                        if nxt_amt and not DBS_TXN_DATE.match(nxt):
-                            # Next line is balance — amt1 is withdrawal
-                            pending_txn_type = "debit"
-                            i += 1  # consume balance line
-                        else:
-                            # amt1 might be deposit (no second amount line)
-                            pending_txn_type = "debit"
-
-                    desc = " ".join(pending_desc).strip()
-                    transactions.append({
-                        "date":        date_str,
-                        "bank":        "DBS",
-                        "account":     current_account,
-                        "account_no":  f"****{current_acct_no[-4:]}" if current_acct_no else "",
-                        "description": desc,
-                        "amount":      round(-amt1, 2),
-                        "type":        "debit",
-                        "source_file": pdf_path.name,
-                    })
-                    flush_pending()
+                elif AMOUNT_ONLY.match(line):
+                    amount_raw = line.strip()
+                    # Next line is the balance — skip it
+                    if i < len(lines) and AMOUNT_ONLY.match(lines[i].strip()):
+                        i += 1
+                    if txn_date and txn_desc:
+                        commit(amount_raw, txn_desc, txn_date)
+                    txn_date = None; txn_desc = []; state = "IDLE"
 
                 else:
-                    # No amount yet on this line — description continues
-                    pending_date = date_str
-                    pending_desc = [remainder] if remainder else []
-
-            elif pending_date:
-                # Continuation line for current transaction
-                # Check if this line contains the amounts
-                amt_m = DBS_AMOUNTS.search(line)
-                one_m = DBS_ONE_AMOUNT.search(line)
-
-                if amt_m:
-                    amt1    = float(amt_m.group(1).replace(",", ""))
-                    # amt2 is balance
-                    desc_part = line[:amt_m.start()].strip()
-                    if desc_part:
-                        pending_desc.append(desc_part)
-
-                    desc = " ".join(pending_desc).strip()
-
-                    # Determine debit vs credit:
-                    # Peek ahead — if next non-empty non-date line has an amount,
-                    # that's the second column (deposit), so current is withdrawal.
-                    # Simplest heuristic: if description contains "Deposit" or
-                    # "FAST.*Receipt" or "PayNow.*from", it's a credit.
-                    is_credit = bool(re.search(
-                        r"deposit|receipt|salary|refund|cashback|interest|"
-                        r"paynow.*from|fast.*from|giro.*from|credit",
-                        desc, re.IGNORECASE
-                    ))
-                    amount   = amt1 if is_credit else -amt1
-                    txn_type = "credit" if is_credit else "debit"
-
-                    transactions.append({
-                        "date":        pending_date,
-                        "bank":        "DBS",
-                        "account":     current_account,
-                        "account_no":  f"****{current_acct_no[-4:]}" if current_acct_no else "",
-                        "description": desc,
-                        "amount":      round(amount, 2),
-                        "type":        txn_type,
-                        "source_file": pdf_path.name,
-                    })
-                    flush_pending()
-
-                elif one_m and len(line.strip()) < 20:
-                    # Likely a standalone amount line (balance column overflow)
-                    # Skip — balance lines don't add transaction info
-                    pass
-                else:
-                    # Pure description continuation
-                    if line and not SKIP_LINES.search(line):
-                        pending_desc.append(line)
+                    if len(line) > 1:
+                        txn_desc.append(line)
 
     doc.close()
     return transactions
-
-
-# ─── STANDARD CHARTERED PARSER ───────────────────────────────────────────────
-#
-# SCB statements are per-account PDFs. Layout:
-#   Date | Description | Withdrawals | Deposits | Balance
-# Credit card variant:
-#   Transaction Date | Posting Date | Description | Amount
-
-SCB_DATE = re.compile(r"(\d{2}\s+[A-Za-z]{3}\s+\d{4}|\d{2}/\d{2}/\d{4}|\d{2}\s+[A-Za-z]{3})")
-
 
 def parse_scb(pdf_path: Path) -> list[dict]:
     """
@@ -365,11 +311,20 @@ def parse_scb(pdf_path: Path) -> list[dict]:
 
 # ─── BANK DETECTOR ───────────────────────────────────────────────────────────
 
+ISO_DATE_FILENAME = re.compile(r"^\d{8}\.pdf$", re.IGNORECASE)
+
 def detect_bank(pdf_path: Path) -> str:
-    """Quick scan of first page text to detect bank. Uses pymupdf for DBS font compatibility."""
+    """Detect bank from filename pattern or PDF content."""
+    # SCB statements download with ISO date filenames e.g. 20221231.pdf
+    if ISO_DATE_FILENAME.match(pdf_path.name):
+        return "SCB"
+    # DBS statements download with descriptive names containing DBS/POSB
+    if "dbs" in pdf_path.name.lower() or "posb" in pdf_path.name.lower():
+        return "DBS"
+    # Fallback: scan PDF content
     try:
         doc  = fitz.open(str(pdf_path))
-        text = doc[0].get_text().lower()
+        text = " ".join(doc[i].get_text().lower() for i in range(min(3, len(doc))))
         doc.close()
         if "dbs" in text or "posb" in text:
             return "DBS"
