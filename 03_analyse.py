@@ -379,10 +379,11 @@ def generate_dashboard(df: pd.DataFrame):
     monthly_income = json.dumps(monthly["income"].round(2).tolist())
     monthly_expense = json.dumps(monthly["expense"].round(2).tolist())
 
-    annual_labels = json.dumps(annual["year"].astype(str).tolist())
-    annual_income = json.dumps(annual["income"].round(2).tolist())
+    annual_labels  = json.dumps(annual["year"].astype(str).tolist())
+    annual_income  = json.dumps(annual["income"].round(2).tolist())
     annual_expense = json.dumps(annual["expense"].round(2).tolist())
     annual_savings = json.dumps(annual["savings_rate"].round(1).tolist())
+    annual_sr_colors = json.dumps(["#60a5fa" if v >= 0 else "#f87171" for v in annual["savings_rate"]])
 
     cat_labels = json.dumps(cat_spend.index.tolist())
     cat_values = json.dumps(cat_spend.round(2).tolist())
@@ -510,14 +511,18 @@ new Chart(document.getElementById("savings"), {{
   data: {{
     labels: {annual_labels},
     datasets: [{{ label: "Savings Rate %", data: {annual_savings},
-                  backgroundColor: COLORS[0], borderRadius: 6 }}]
+                  backgroundColor: {annual_sr_colors},
+                  borderRadius: 4 }}]
   }},
   options: {{
     responsive: true,
     plugins: {{ legend: {{ labels: {{ color: "#e2e8f0" }} }} }},
     scales: {{
       x: {{ ticks: {{ color: "#94a3b8" }}, grid: {{ color: "#334155" }} }},
-      y: {{ max: 100, ticks: {{ color: "#94a3b8", callback: v => v + "%" }}, grid: {{ color: "#334155" }} }}
+      y: {{
+        ticks: {{ color: "#94a3b8", callback: v => v.toFixed(0) + "%" }},
+        grid: {{ color: "#334155" }}
+      }}
     }}
   }}
 }});
