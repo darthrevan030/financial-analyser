@@ -38,10 +38,11 @@ RULES: list[tuple[str, str, str]] = [
     (r"^samarth bhatia.*ibft|ibft.*samarth bhatia.*dbs bank",                 "Finance", "Own Account Transfer"),
 
     # ── Investments ───────────────────────────────────────────────────────────
-    (r"saxo capital",                                                          "Finance", "Investments"),
-    (r"asia wealth platform|remittance transfer.*asia wealth",                "Finance", "Investments"),
-    (r"singapore government securities|sgs application|t-bill|interactive br sg.*trusta", "Finance", "Investments"),
-    (r"advice.*sgs|advice.*dividends.*cdp|shopee.*wdrl|shopeepay.*wdrl",      "Finance", "Investments"),
+    (r"saxo capital markets",                                                  "Investments", "Stocks / ETFs (SAXO)"),
+    (r"interactive br sg|interactive brokers",                                "Investments", "Stocks / ETFs (IBKR)"),
+    (r"asia wealth platform|remittance transfer.*asia wealth|0016rf",         "Investments", "Asia Wealth Platform"),
+    (r"singapore government securities|sgs application|t-bill bs",            "Investments", "T-Bills / SGS"),
+    (r"dividends.*cash distribution.*cdp|refund.*sgs.*discount",              "Investments", "T-Bills / SGS"),
 
     # ── Education / NTU ──────────────────────────────────────────────────────
     (r"nanyang technological university|ntu.*inv-|inv-.*ntu|xntu",            "Education", "Tuition / School Fees"),
