@@ -15,16 +15,18 @@ PDF statements  →  01_parse_statements.py  →  transactions.csv
 Run all steps in order:
 
 ```bash
-python main.py
+uv run python main.py
 ```
 
 Or run steps individually:
 
 ```bash
-python 01_parse_statements.py
-python 02_categorise.py
-python 03_analyse.py
+uv run python 01_parse_statements.py
+uv run python 02_categorise.py
+uv run python 03_analyse.py
 ```
+
+> **Note:** Always use `uv run python` rather than plain `python`. The scripts depend on packages installed in the project's virtual environment (`pymupdf`, `pandas`, etc.) which plain `python` won't find.
 
 ## Setup
 
